@@ -1,0 +1,19 @@
+# Exemplo desativado: substitua regra e condições pelo seu ambiente.
+# Nunca habilite uma supressão sem conferir o resultado do dry-run.
+rules:
+  - id: example-noop
+    name: Exemplo de supressão restrita
+    trigger: alert.received
+    order: 100
+    expires_at: 2027-01-01T00:00:00Z
+    conditions:
+      all:
+        - field: rule_name
+          op: equals
+          value: EXAMPLE_DO_NOT_ENABLE
+        - field: host
+          op: equals
+          value: example.invalid
+    actions:
+      - type: add_tag
+        value: example-review

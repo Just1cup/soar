@@ -1,0 +1,1014 @@
+openapi: 3.1.0
+info:
+  title: SOAR Platform API
+  version: 0.1.0
+  description: |
+    Contrato da plataforma. Este arquivo é a fonte: gera os tipos Go
+    (oapi-codegen) e o cliente TypeScript, e o CI falha se o servidor divergir.
+
+    Convenções, válidas para toda rota:
+      - resposta de sucesso: { data, meta?, request_id }
+      - resposta de erro:    { error: { code, message }, request_id }
+      - coleções paginadas por cursor opaco; nunca offset
+      - mutação exige If-Match (ETag) ou expected_version; divergência -> 409
+      - ação externa exige Idempotency-Key
+servers:
+  - url: /api/v1
+
+tags:
+  - name: health
+  - name: auth
+  - name: incidents
+  - name: assessments
+
+security:
+  - cookieAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Cria uma sessão local
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Sessão criada; os tokens seguem em cookies.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/LoginUser' }
+        '401': { $ref: '#/components/responses/Error' }
+        '429': { $ref: '#/components/responses/Error' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoga a sessão atual
+      operationId: logout
+      parameters:
+        - $ref: '#/components/parameters/CSRFToken'
+      responses:
+        '200': { $ref: '#/components/responses/Success' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Identidade e permissões da sessão atual
+      operationId: getCurrentActor
+      responses:
+        '200':
+          description: Ator autenticado
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CurrentActor' }
+        '401': { $ref: '#/components/responses/Error' }
+
+  /incidents:
+    get:
+      tags: [incidents]
+      summary: Lista incidentes, mais recentes primeiro
+      operationId: listIncidents
+      parameters:
+        - { name: status,   in: query, schema: { $ref: '#/components/schemas/IncidentStatus' } }
+        - { name: open_only, in: query, schema: { type: boolean, default: false }, description: Inclui todos os estados exceto fechado. }
+        - { name: severity, in: query, schema: { $ref: '#/components/schemas/Severity' } }
+        - { name: owner_id, in: query, schema: { type: string, format: uuid } }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: cursor
+          in: query
+          description: Cursor opaco devolvido em meta.next_cursor.
+          schema: { type: string, maxLength: 512 }
+      responses:
+        '200':
+          description: Página de incidentes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta, request_id]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/IncidentSummary' }
+                  meta: { $ref: '#/components/schemas/PageMeta' }
+                  request_id: { type: string }
+        '400': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}:
+    get:
+      tags: [incidents]
+      summary: Um incidente
+      operationId: getIncident
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: O incidente
+          headers:
+            ETag:
+              description: Versão atual; devolva em If-Match para mutar.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, request_id]
+                properties:
+                  data: { $ref: '#/components/schemas/Incident' }
+                  request_id: { type: string }
+        '404': { $ref: '#/components/responses/Error' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/timeline:
+    get:
+      tags: [incidents]
+      summary: War Room cronológico do incidente
+      operationId: getIncidentTimeline
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+      responses:
+        '200':
+          description: Eventos em ordem cronológica
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta, request_id]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TimelineEntry' }
+                  meta: { $ref: '#/components/schemas/CountMeta' }
+                  request_id: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/tasks:
+    get:
+      tags: [incidents]
+      summary: Tarefas do roteiro selecionado pela regra do incidente
+      operationId: getIncidentTasks
+      parameters: [{ $ref: '#/components/parameters/IncidentID' }]
+      responses:
+        '200':
+          description: Tarefas em ordem de execução
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/CaseTask' } }
+                  meta: { $ref: '#/components/schemas/CountMeta' }
+                  request_id: { type: string }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/tasks/{taskId}/complete:
+    post:
+      tags: [incidents]
+      summary: Conclui uma tarefa com controle de versão
+      operationId: completeIncidentTask
+      parameters:
+        - { $ref: '#/components/parameters/IncidentID' }
+        - { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompleteTaskRequest' }
+      responses:
+        '200': { description: Tarefa concluída }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/tasks/{taskId}/notes:
+    get:
+      tags: [incidents]
+      summary: Notas de uma tarefa
+      operationId: getTaskNotes
+      parameters:
+        - { $ref: '#/components/parameters/IncidentID' }
+        - { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Notas da tarefa }
+        '403': { $ref: '#/components/responses/Error' }
+    post:
+      tags: [incidents]
+      summary: Publica uma nota na tarefa e no War Room
+      operationId: addTaskNote
+      parameters:
+        - { $ref: '#/components/parameters/IncidentID' }
+        - { name: taskId, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/CSRFToken' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddTaskNoteRequest' }
+      responses:
+        '201': { description: Nota publicada }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/close:
+    post:
+      tags: [incidents]
+      summary: Fecha o incidente com resolução e motivo
+      operationId: closeIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CloseIncidentRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/assign:
+    post:
+      tags: [incidents]
+      summary: Atribui o incidente a um analista
+      operationId: assignIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AssignIncidentRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/reopen:
+    post:
+      tags: [incidents]
+      summary: Reabre um incidente fechado, preservando o fechamento na trilha
+      operationId: reopenIncident
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReopenIncidentRequest' }
+      responses:
+        '200': { $ref: '#/components/responses/Incident' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+        '428': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/assessments:
+    get:
+      tags: [assessments]
+      summary: Lista os artefatos imutáveis de análise do incidente
+      operationId: listIncidentAssessments
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+      responses:
+        '200':
+          description: Avaliações mais recentes primeiro
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta, request_id]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Assessment' }
+                  meta: { $ref: '#/components/schemas/CountMeta' }
+                  request_id: { type: string }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/evidence:
+    get:
+      tags: [incidents]
+      summary: Coleta fatos e IOCs do caso sem invocar o modelo
+      operationId: getIncidentEvidence
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+      responses:
+        '200':
+          description: Evidência determinística construída do alerta e da telemetria disponível
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/CaseEvidence' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+  /incidents/{id}/assessments/{assessment_id}/promote:
+    post:
+      tags: [assessments]
+      summary: Adota uma avaliação como veredito humano sem fechar o incidente
+      operationId: promoteAssessment
+      parameters:
+        - $ref: '#/components/parameters/IncidentID'
+        - name: assessment_id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/CSRFToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PromoteAssessmentRequest' }
+      responses:
+        '200':
+          description: Avaliação promovida; o incidente não é fechado por esta operação.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Assessment' }
+        '401': { $ref: '#/components/responses/Error' }
+        '403': { $ref: '#/components/responses/Error' }
+        '404': { $ref: '#/components/responses/Error' }
+        '409': { $ref: '#/components/responses/Error' }
+        '422': { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: soar_session
+
+  parameters:
+    IncidentID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: Versão entre aspas. Obrigatório se expected_version não vier no corpo.
+      schema: { type: string, examples: ['"4"'] }
+    CSRFToken:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Token legível do cookie soar_csrf, vinculado à sessão.
+      schema: { type: string, minLength: 32 }
+
+  schemas:
+    IncidentStatus:
+      type: string
+      enum: [new, triage, investigating, pending_action, resolved, closed]
+    Severity:
+      type: string
+      enum: [critical, high, medium, low, info]
+    Resolution:
+      type: string
+      enum: [true_positive, benign_true_positive, false_positive, inconclusive]
+
+    AssessmentConfidence:
+      type: string
+      enum: [low, medium, high]
+
+    EvidenceBasis:
+      type: string
+      enum: [observed, inferred, unknown]
+
+    AssessmentObservation:
+      type: object
+      required: [statement, basis]
+      properties:
+        statement: { type: string }
+        basis: { $ref: '#/components/schemas/EvidenceBasis' }
+
+    AssessmentHypothesis:
+      type: object
+      required: [kind, statement, supporting, contradicting]
+      properties:
+        kind: { type: string, enum: [benign, suspicious] }
+        statement: { type: string }
+        supporting: { type: array, items: { type: string } }
+        contradicting: { type: array, items: { type: string } }
+
+    AssessmentDiamond:
+      type: object
+      required: [adversary, capability, infrastructure, victim]
+      properties:
+        adversary: { type: string }
+        capability: { type: string }
+        infrastructure: { type: string }
+        victim: { type: string }
+
+    AssessmentBody:
+      type: object
+      required:
+        - why_notable
+        - observed
+        - suspicious_indicators
+        - benign_indicators
+        - hypotheses
+        - attack_context
+        - diamond
+        - likely_benign_if
+        - more_suspicious_if
+        - intelligence_gaps
+        - recommended_actions
+        - reasoning
+        - decision_reasoning
+        - investigation_verdict
+        - favoured_hypothesis
+      properties:
+        why_notable: { type: string }
+        observed: { type: array, items: { $ref: '#/components/schemas/AssessmentObservation' } }
+        suspicious_indicators: { type: array, items: { type: string } }
+        benign_indicators: { type: array, items: { type: string } }
+        hypotheses: { type: array, minItems: 2, maxItems: 2, items: { $ref: '#/components/schemas/AssessmentHypothesis' } }
+        attack_context: { type: string }
+        diamond: { $ref: '#/components/schemas/AssessmentDiamond' }
+        likely_benign_if: { type: array, items: { type: string } }
+        more_suspicious_if: { type: array, items: { type: string } }
+        intelligence_gaps: { type: array, items: { type: string } }
+        recommended_actions: { type: array, items: { type: string } }
+        reasoning: { type: string }
+        decision_reasoning: { type: string }
+        investigation_verdict: { $ref: '#/components/schemas/Resolution' }
+        favoured_hypothesis: { type: string, enum: [suspicious, benign, balanced] }
+        behaviour_occurred: { type: [boolean, 'null'] }
+
+    Assessment:
+      type: object
+      required:
+        - id
+        - incident_id
+        - author_kind
+        - model
+        - schema_version
+        - verdict
+        - confidence
+        - source_reliability
+        - info_credibility
+        - admiralty
+        - title
+        - summary
+        - body
+        - case_context
+        - attack_tactics
+        - attack_techniques
+        - disagreed
+        - generated_at
+        - latency_ms
+        - prompt_tokens
+      properties:
+        id: { type: string, format: uuid }
+        incident_id: { type: string, format: uuid }
+        supersedes: { type: [string, 'null'], format: uuid }
+        author_kind: { type: string, enum: [model, human] }
+        model: { type: string }
+        schema_version: { type: integer }
+        verdict: { $ref: '#/components/schemas/Resolution' }
+        confidence: { $ref: '#/components/schemas/AssessmentConfidence' }
+        source_reliability: { type: string, enum: [A, B, C, D, E, F] }
+        info_credibility: { type: string, enum: ['1', '2', '3', '4', '5', '6'] }
+        admiralty: { type: string, pattern: '^[A-F][1-6]$' }
+        title: { type: string }
+        summary: { type: string }
+        body: { $ref: '#/components/schemas/AssessmentBody' }
+        case_context: { type: object, additionalProperties: true }
+        attack_tactics: { type: array, items: { type: string } }
+        attack_techniques: { type: array, items: { type: string } }
+        disagreed: { type: boolean }
+        promoted_at: { type: [string, 'null'], format: date-time }
+        promoted_by: { type: [string, 'null'], format: uuid }
+        generated_at: { type: string, format: date-time }
+        latency_ms: { type: integer, minimum: 0 }
+        prompt_tokens: { type: integer, minimum: 0 }
+
+    CaseEvidenceCluster:
+      type: object
+      required: [cluster_id, rule_name, host, entity_kind, entity, count,
+                 first_seen, last_seen, severity, risk_score, rule_tactics, rule_techniques]
+      properties:
+        cluster_id: { type: string }
+        rule_name: { type: string }
+        host: { type: string }
+        entity_kind: { type: string }
+        entity: { type: [string, 'null'] }
+        count: { type: integer, minimum: 0 }
+        first_seen: { type: string }
+        last_seen: { type: string }
+        severity: { type: string }
+        risk_score: { type: [integer, 'null'] }
+        rule_tactics: { type: array, items: { type: string } }
+        rule_techniques: { type: array, items: { type: string } }
+        observables:
+          type: object
+          additionalProperties: { type: array, items: { type: string } }
+        samples:
+          type: array
+          items: { type: object, additionalProperties: true }
+
+    CaseEvidenceProcess:
+      type: object
+      required: [level, executable, source]
+      properties:
+        level: { type: string }
+        executable: { type: [string, 'null'] }
+        source: { type: string }
+        command_line: { type: [string, 'null'] }
+        user: { type: [string, 'null'] }
+
+    CaseEvidenceFiles:
+      type: object
+      required: [events, actions, paths, count, directories, extensions, hashes]
+      properties:
+        events: { type: [integer, 'null'] }
+        actions: { type: object, additionalProperties: { type: integer } }
+        paths: { type: array, items: { type: string } }
+        count: { type: integer }
+        directories: { type: array, items: { type: string } }
+        extensions: { type: object, additionalProperties: { type: integer } }
+        hashes: { type: array, items: { type: string } }
+
+    CaseEvidenceNetwork:
+      type: object
+      required: [events, destinations, domains]
+      properties:
+        events: { type: integer }
+        destinations:
+          type: array
+          items:
+            type: object
+            required: [ip, n, port]
+            properties:
+              ip: { type: string }
+              n: { type: integer }
+              port: {}
+        domains: { type: array, items: { type: string } }
+
+    CaseEvidenceWeb:
+      type: object
+      required: [urls, statuses, methods]
+      properties:
+        urls: { type: array, items: { type: string } }
+        statuses: { type: object, additionalProperties: { type: integer } }
+        methods: { type: object, additionalProperties: { type: integer } }
+
+    CaseEvidenceContext:
+      type: object
+      required: [window, collected, missing, timeline, related_alerts, prevalence, ioc_hits, entities]
+      properties:
+        window:
+          type: object
+          required: [first, last, alerts]
+          properties:
+            first: { type: string }
+            last: { type: string }
+            alerts: { type: integer }
+        collected: { type: array, items: { type: string } }
+        missing: { type: array, items: { type: string } }
+        timeline:
+          type: array
+          items: { type: object, additionalProperties: true }
+        process_chain: { type: array, items: { $ref: '#/components/schemas/CaseEvidenceProcess' } }
+        files: { $ref: '#/components/schemas/CaseEvidenceFiles' }
+        network: { $ref: '#/components/schemas/CaseEvidenceNetwork' }
+        web: { $ref: '#/components/schemas/CaseEvidenceWeb' }
+        related_alerts:
+          type: array
+          items:
+            type: object
+            required: [rule, n, severity]
+            properties:
+              rule: { type: string }
+              n: { type: integer }
+              severity: { type: [string, 'null'] }
+        prevalence:
+          type: object
+          additionalProperties: true
+        ioc_hits:
+          type: array
+          items:
+            type: object
+            required: [indicator, feed, type]
+            properties:
+              indicator: {}
+              feed: {}
+              type: {}
+        entities:
+          type: object
+          required: [hosts, users, processes, files, hashes, ips, domains, urls, ioc_hits]
+          properties:
+            hosts: { type: integer }
+            users: { type: integer }
+            processes: { type: integer }
+            files: { type: integer }
+            hashes: { type: integer }
+            ips: { type: integer }
+            domains: { type: integer }
+            urls: { type: integer }
+            ioc_hits: { type: integer }
+
+    CaseEvidence:
+      type: object
+      required: [cluster, case_context]
+      properties:
+        cluster: { $ref: '#/components/schemas/CaseEvidenceCluster' }
+        case_context: { $ref: '#/components/schemas/CaseEvidenceContext' }
+
+    PromoteAssessmentRequest:
+      type: object
+      additionalProperties: false
+      required: [note]
+      properties:
+        note: { type: string, minLength: 1, maxLength: 4000 }
+
+    Autonomy:
+      type: string
+      description: |
+        auto executa sozinha; approval_required suspende com um plano
+        fingerprintado; manual apenas sugere.
+      enum: [auto, approval_required, manual]
+
+    IntegrationAction:
+      type: object
+      required: [id, name, autonomy, permission, idempotent, plan, implemented, input]
+      properties:
+        id:          { type: string }
+        name:        { type: string }
+        autonomy:    { $ref: '#/components/schemas/Autonomy' }
+        permission:  { type: string }
+        idempotent:  { type: boolean }
+        plan:        { type: boolean }
+        reversible:  { type: string }
+        implemented:
+          type: boolean
+          description: |
+            false significa que a ação existe no catálogo e não tem adapter
+            compilado neste deploy; a chamada responde 501 com a razão.
+        unavailable: { type: string }
+        input:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/ActionField' }
+
+    ActionField:
+      type: object
+      required: [type, required]
+      properties:
+        type: { type: string }
+        required: { type: boolean }
+        descr: { type: string }
+
+    Integration:
+      type: object
+      required: [id, name, pack_id, actions]
+      properties:
+        id:      { type: string }
+        name:    { type: string }
+        pack_id: { type: string }
+        actions: { type: array, items: { $ref: '#/components/schemas/IntegrationAction' } }
+
+    ActionPlan:
+      type: object
+      required: [summary, details, reversible, warnings, ready]
+      properties:
+        summary:    { type: string }
+        details:    { type: array, items: { type: string } }
+        affected:   { type: [integer, 'null'] }
+        reversible: { type: string }
+        warnings:   { type: array, items: { type: string } }
+        request:
+          type: object
+          additionalProperties: true
+          description: |
+            A requisição literal que seria enviada, devolvida de propósito: o
+            operador pode executá-la à mão em vez de confiar no botão.
+        ready:      { type: boolean }
+
+    ActionPreview:
+      type: object
+      required: [plan, autonomy, idempotent]
+      properties:
+        plan:        { $ref: '#/components/schemas/ActionPlan' }
+        autonomy:    { $ref: '#/components/schemas/Autonomy' }
+        idempotent:  { type: boolean }
+        approval_id: { type: [string, 'null'], format: uuid }
+        approval_version:
+          type: [integer, 'null']
+          minimum: 1
+          description: Versão para decisão inline com locking otimista.
+        expires_at:  { type: [string, 'null'], format: date-time }
+
+    Approval:
+      type: object
+      required: [id, action, permission, plan, status, requested_by, requested_at, expires_at, version]
+      properties:
+        id:           { type: string, format: uuid }
+        incident_id:  { type: [string, 'null'], format: uuid }
+        action:       { type: string }
+        permission:   { type: string }
+        plan:         { $ref: '#/components/schemas/ActionPlan' }
+        affected:     { type: [integer, 'null'] }
+        status:
+          type: string
+          enum: [requested, approved, rejected, expired, superseded, consumed]
+        requested_by: { type: string }
+        requested_at: { type: string, format: date-time }
+        expires_at:   { type: string, format: date-time }
+        decided_at:   { type: [string, 'null'], format: date-time }
+        note:         { type: string }
+        version:      { type: integer }
+
+    DecideRequest:
+      type: object
+      additionalProperties: false
+      required: [approve]
+      properties:
+        approve: { type: boolean }
+        note:
+          type: string
+          maxLength: 4000
+          description: Obrigatório ao recusar; recusar sem motivo deixa o próximo analista repetindo o pedido.
+        expected_version: { type: integer, minimum: 1 }
+
+    ActionRun:
+      type: object
+      required: [id, integration, action, autonomy, status, actor_kind, actor_id, requested_at]
+      properties:
+        id:           { type: string, format: uuid }
+        integration:  { type: string }
+        action:       { type: string }
+        autonomy:     { $ref: '#/components/schemas/Autonomy' }
+        status:       { type: string, enum: [pending, running, succeeded, failed, skipped] }
+        affected:     { type: [integer, 'null'] }
+        error:        { type: string }
+        actor_kind:   { type: string }
+        actor_id:     { type: string }
+        requested_at: { type: string, format: date-time }
+        finished_at:  { type: [string, 'null'], format: date-time }
+        latency_ms:   { type: [integer, 'null'] }
+
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 1, maxLength: 1024 }
+
+    LoginUser:
+      type: object
+      required: [user_id, email, display_name]
+      properties:
+        user_id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        display_name: { type: string }
+
+    CurrentActor:
+      type: object
+      required: [actor_id, kind, display_name, permissions]
+      properties:
+        actor_id: { type: string }
+        kind: { type: string, enum: [user, automation, workflow, integration, system] }
+        display_name: { type: string }
+        permissions:
+          type: array
+          items: { type: string }
+
+    CloseIncidentRequest:
+      type: object
+      additionalProperties: false
+      required: [resolution, reason]
+      properties:
+        resolution: { $ref: '#/components/schemas/Resolution' }
+        reason: { type: string, minLength: 1, maxLength: 4000 }
+        expected_version: { type: integer, minimum: 1 }
+
+    AssignIncidentRequest:
+      type: object
+      additionalProperties: false
+      required: [owner_id]
+      properties:
+        owner_id: { type: string, format: uuid }
+        expected_version: { type: integer, minimum: 1 }
+
+    ReopenIncidentRequest:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 1, maxLength: 4000 }
+        expected_version: { type: integer, minimum: 1 }
+
+    TimelineEntry:
+      type: object
+      required: [id, occurred_at, event_type, actor_kind, actor_label, title, detail, payload]
+      properties:
+        id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        event_type: { type: string }
+        actor_kind: { type: string }
+        actor_label: { type: string }
+        title: { type: string }
+        detail: { type: string }
+        payload: { type: object, additionalProperties: true }
+
+    CaseTask:
+      type: object
+      required: [id, phase, title, instruction, position, mandatory, status, version]
+      properties:
+        id: { type: string, format: uuid }
+        phase: { type: string }
+        title: { type: string }
+        instruction: { type: string }
+        position: { type: integer }
+        mandatory: { type: boolean }
+        status: { type: string, enum: [pending, done] }
+        completed_at: { type: [string, 'null'], format: date-time }
+        version: { type: integer }
+
+    TaskNote:
+      type: object
+      required: [id, task_id, author_label, body, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        task_id: { type: string, format: uuid }
+        author_label: { type: string }
+        body: { type: string }
+        created_at: { type: string, format: date-time }
+
+    CompleteTaskRequest:
+      type: object
+      additionalProperties: false
+      required: [expected_version]
+      properties:
+        expected_version: { type: integer, minimum: 1 }
+
+    AddTaskNoteRequest:
+      type: object
+      additionalProperties: false
+      required: [body]
+      properties:
+        body: { type: string, minLength: 1, maxLength: 4000 }
+
+    IncidentSummary:
+      type: object
+      required: [id, key, title, status, severity, priority, alert_count,
+                 first_seen, last_seen, created_at, updated_at, version]
+      properties:
+        id:          { type: string, format: uuid }
+        key:         { type: string, examples: ['INC-2026-000123'] }
+        title:       { type: string }
+        status:      { $ref: '#/components/schemas/IncidentStatus' }
+        severity:    { $ref: '#/components/schemas/Severity' }
+        priority:    { type: integer, minimum: 1, maximum: 5 }
+        owner_id:    { type: [string, 'null'], format: uuid }
+        owner_name:  { type: [string, 'null'] }
+        source_rule: { type: [string, 'null'] }
+        alert_count: { type: integer }
+        first_seen:  { type: string, format: date-time }
+        last_seen:   { type: string, format: date-time }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+        version:     { type: integer }
+
+    Incident:
+      allOf:
+        - $ref: '#/components/schemas/IncidentSummary'
+        - type: object
+          required: [type_slug, attack_tactics, attack_techniques, tags]
+          properties:
+            type_slug:         { type: string }
+            description:       { type: [string, 'null'] }
+            resolution:
+              oneOf:
+                - $ref: '#/components/schemas/Resolution'
+                - type: 'null'
+            closed_reason:     { type: [string, 'null'] }
+            closed_at:         { type: [string, 'null'], format: date-time }
+            first_ack_at:      { type: [string, 'null'], format: date-time }
+            attack_tactics:    { type: array, items: { type: string } }
+            attack_techniques: { type: array, items: { type: string } }
+            tags:              { type: array, items: { type: string } }
+
+    PageMeta:
+      type: object
+      required: [count]
+      properties:
+        count:       { type: integer }
+        next_cursor: { type: [string, 'null'] }
+
+    CountMeta:
+      type: object
+      required: [count]
+      properties:
+        count: { type: integer, minimum: 0 }
+
+    SuccessEnvelope:
+      type: object
+      required: [data, request_id]
+      properties:
+        data: {}
+        meta: {}
+        request_id: { type: string }
+
+    Error:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Código estável, seguro para o cliente ramificar.
+              examples: ['INCIDENT_NOT_FOUND', 'VALIDATION_FAILED', 'VERSION_CONFLICT']
+            message: { type: string }
+        request_id: { type: string }
+
+  responses:
+    Success:
+      description: Operação concluída
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/SuccessEnvelope' }
+    Incident:
+      description: Estado atualizado do incidente
+      headers:
+        ETag:
+          description: Nova versão do incidente.
+          schema: { type: string }
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/SuccessEnvelope'
+              - type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Incident' }
+    Error:
+      description: Erro
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }

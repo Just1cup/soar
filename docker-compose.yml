@@ -1,0 +1,105 @@
+# Perfil `edge` (docs/soar/08 §5): PostgreSQL como intake sink, sem broker.
+# Mesmas imagens do Kubernetes — o compose não pode ser um segundo jeito de
+# rodar, ou ele deriva.
+name: soar
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    command: ["-c", "shared_preload_libraries=pg_stat_statements"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-soar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-soar}
+    # PostgreSQL 18 mudou o ponto de montagem: /var/lib/postgresql, não .../data.
+    # E o caminho do host tem de estar no NVMe (docs/soar/07 §13.4).
+    volumes:
+      - ${SOAR_PGDATA:-${HOME}/.local/share/soar/pg}:/var/lib/postgresql
+    ports: ["127.0.0.1:5433:5432"]
+    shm_size: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soar} -d ${POSTGRES_DB:-soar}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: ../deploy/docker/api.Dockerfile
+    environment:
+      SOAR_DATABASE_URL: postgres://${POSTGRES_USER:-soar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-soar}?sslmode=disable
+      SOAR_HTTP_ADDR: 0.0.0.0:8080
+      SOAR_ENV: ${SOAR_ENV:-production}
+      SOAR_PROFILE: ${SOAR_PROFILE:-edge}
+      SOAR_CURSOR_SECRET: ${SOAR_CURSOR_SECRET:?defina SOAR_CURSOR_SECRET}
+      SOAR_DB_MAX_CONNS: "10"
+      SOAR_CONTENT_PACKS: /content-packs
+      SOAR_INGEST_ENABLED: "${SOAR_INGEST_ENABLED:-true}"
+      SOAR_INGEST_INTERVAL_SECONDS: "${SOAR_INGEST_INTERVAL_SECONDS:-60}"
+      # F-11 permanece opt-in até o Ollama do host estar acessível pela bridge
+      # e o port passar pelo harness de qualidade descrito no roadmap.
+      SOAR_ASSESSMENT_ENABLED: "${SOAR_ASSESSMENT_ENABLED:-false}"
+      SOAR_OLLAMA_URL: "${SOAR_OLLAMA_URL:-http://host.docker.internal:11434}"
+      SOAR_OLLAMA_MODEL: "${SOAR_OLLAMA_MODEL:-qwen3:8b}"
+      SOAR_OLLAMA_NUM_CTX: "${SOAR_OLLAMA_NUM_CTX:-8192}"
+      SOAR_OLLAMA_TIMEOUT_SECONDS: "${SOAR_OLLAMA_TIMEOUT_SECONDS:-240}"
+      SOAR_ASSESSMENT_ELASTIC_URL: "${SOAR_ASSESSMENT_ELASTIC_URL:-}"
+      KIBANA_AUTH: "${KIBANA_AUTH:-}"
+      ELASTIC_AUTH: "${ELASTIC_AUTH:-}"
+    volumes:
+      # Somente leitura: conteúdo (integrações, regras) se atualiza sem
+      # reconstruir a imagem, mas o processo não o altera.
+      - ./content-packs:/content-packs:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      # O Elastic deste laboratório publica APENAS em 127.0.0.1 do host,
+      # então host.docker.internal (o gateway da bridge) resolve o nome e
+      # encontra porta fechada. Falar contêiner-a-contêiner resolve sem
+      # expor o SIEM para mais ninguém.
+      - siem
+    # A API não fala com a internet: quem chama provedor externo é o worker
+    # (docs/soar/03 §12.4). Aqui isso é intenção declarada; no k8s é NetworkPolicy.
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    healthcheck:
+      test: ["CMD", "/api", "-healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: ../deploy/docker/frontend.Dockerfile
+    depends_on: [api]
+    ports: ["127.0.0.1:${SOAR_WEB_PORT:-8088}:8080"]
+    read_only: true
+    environment:
+      NGINX_RESOLVER: 127.0.0.11          # DNS embutido do Docker
+      API_UPSTREAM: http://api:8080
+    tmpfs:
+      - /tmp:size=16m,uid=101,gid=101
+      - /var/cache/nginx:size=16m,uid=101,gid=101
+      - /etc/nginx/conf.d:size=1m,uid=101,gid=101
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: unless-stopped
+
+networks:
+  default:
+  siem:
+    # Rede do elastic-start-local. Externa de propósito: este compose não a
+    # cria nem a gerencia, só entra nela. Se o laboratório Elastic não estiver
+    # de pé, subir a stack falha de imediato — o que é melhor que subir e
+    # descobrir pelo log de ingestão.
+    external: true
+    name: ${SOAR_SIEM_NETWORK:-elastic-start-local_default}

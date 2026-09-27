@@ -1,0 +1,36 @@
+# As migrations rodam antes do rollout, num Job próprio. A API também as
+# aplica na partida, mas isso é a rede de segurança do perfil `edge`; em
+# cluster, aplicar schema a partir de N réplicas competindo é pedir corrida.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: soar-migrate
+  namespace: soar
+  annotations:
+    # Com Argo/Flux, isto vira um hook de pré-sincronização.
+    soar.io/run-before: rollout
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: soar-migrate
+      securityContext: { runAsNonRoot: true, runAsUser: 65532,
+                         seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: migrate
+          image: soar-api:dev
+          # O mesmo binário: as migrations estão embarcadas nele, então não há
+          # como a imagem e o schema divergirem de versão.
+          args: ["-migrate-only"]
+          envFrom:
+            - configMapRef: { name: soar-config }
+            - secretRef:    { name: soar-secrets }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }

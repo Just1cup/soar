@@ -1,0 +1,10 @@
+DROP TABLE IF EXISTS platform.processed_events;
+DROP TABLE IF EXISTS platform.outbox_events;
+DROP TRIGGER IF EXISTS timeline_events_immutable ON audit.timeline_events;
+DROP TRIGGER IF EXISTS audit_events_immutable ON audit.audit_events;
+DROP FUNCTION IF EXISTS audit.ensure_partitions(INT);
+DROP FUNCTION IF EXISTS audit.reject_mutation();
+DROP TABLE IF EXISTS audit.timeline_events;
+DROP TABLE IF EXISTS audit.audit_events;
+DROP SCHEMA IF EXISTS platform;
+DROP SCHEMA IF EXISTS audit;

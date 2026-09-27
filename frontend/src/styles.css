@@ -1,0 +1,97 @@
+/* Tokens de design.
+ *
+ * O escuro é o PADRÃO, e não o que o sistema operacional pedir: um console de
+ * SOC é olhado por horas seguidas, e seguir o `prefers-color-scheme` devolveria
+ * o tema claro para quem tem o SO no claro — que é exatamente o caso que
+ * motivou isto. O claro existe, mas só por escolha explícita no seletor.
+ *
+ * Nenhum componente escreve cor literal: tudo sai daqui, e é o que permite
+ * trocar o tema sem varrer a aplicação.
+ *
+ * Contrastes medidos (não estimados), todos >= 4.5:1 no escuro:
+ *   fg/bg 15.9:1 · fg-muted/bg 8.3:1 · chips 8.3-10.0:1 · foco 7.3:1
+ */
+:root {
+  /* `color-scheme` importa: sem ele os controles nativos (select, scrollbar,
+     autofill) continuam brancos e brilham no meio da tela escura. */
+  color-scheme: dark;
+
+  --bg:            #0d0f14;
+  --bg-raised:     #151922;
+  --bg-hover:      #1e232e;
+  --fg:            #e7eaf1;
+  --fg-muted:      #a2abbd;
+  --border:        #2c3340;
+  --border-subtle: #1f242f;
+  --focus:         #7aa5ff;
+  --shadow:        0 1px 2px rgb(0 0 0 / .4), 0 8px 24px rgb(0 0 0 / .25);
+
+  /* Severidade. A cor nunca carrega o significado sozinha — o rótulo textual
+     vai junto em todo chip, porque ~8% dos homens têm deficiência de visão de
+     cores e um SOC não pode depender de distinguir laranja de amarelo. */
+  --sev-critical-bg: #3a1418; --sev-critical-fg: #ffa0a0;
+  --sev-high-bg:     #361f0b; --sev-high-fg:     #ffb974;
+  --sev-medium-bg:   #322806; --sev-medium-fg:   #f0d475;
+  --sev-low-bg:      #132436; --sev-low-fg:      #93c0fb;
+  --sev-info-bg:     #1c212b; --sev-info-fg:     #b3bacb;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --bg:            #fbfbfd;
+  --bg-raised:     #ffffff;
+  --bg-hover:      #f2f3f7;
+  --fg:            #16181d;
+  --fg-muted:      #545a68;
+  --border:        #d5d9e2;
+  --border-subtle: #eceef3;
+  --focus:         #1d4ed8;
+  --shadow:        0 1px 2px rgb(16 24 40 / .06), 0 8px 24px rgb(16 24 40 / .08);
+
+  --sev-critical-bg: #fde8e8; --sev-critical-fg: #99191b;
+  --sev-high-bg:     #fdeede; --sev-high-fg:     #8c4205;
+  --sev-medium-bg:   #fdf6dc; --sev-medium-fg:   #6b5204;
+  --sev-low-bg:      #e7f0fb; --sev-low-fg:      #1c4685;
+  --sev-info-bg:     #eef0f4; --sev-info-fg:     #434959;
+}
+
+* { box-sizing: border-box; }
+
+html, body { min-height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* No escuro, a barra de rolagem padrão do Chromium fica clara e corta a tela
+   ao meio. `color-scheme` resolve no Firefox; isto cobre o resto. */
+::-webkit-scrollbar { width: 12px; height: 12px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb {
+  background: var(--border); border-radius: 6px;
+  border: 3px solid var(--bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
+
+::selection { background: var(--focus); color: var(--bg); }
+
+/* Um foco visível é requisito de acessibilidade, e num console operado por
+   teclado é também requisito de velocidade. */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+
+@media (prefers-contrast: more) {
+  :root { --border: currentColor; --fg-muted: var(--fg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}

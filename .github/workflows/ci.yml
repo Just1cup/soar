@@ -1,0 +1,186 @@
+name: CI
+
+on:
+  push: { branches: [main] }
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.27"
+  NODE_VERSION: "24"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache-dependency-path: backend/go.sum }
+      - name: gofmt (falha se houver saída)
+        working-directory: backend
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - run: go vet ./...
+        working-directory: backend
+      - uses: golangci/golangci-lint-action@v6
+        with: { working-directory: backend, args: --timeout=5m }
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      # Os tipos do frontend NÃO são escritos à mão. Se o gerado divergir do
+      # versionado, o contrato e o cliente estão fora de sincronia.
+      - name: tipos gerados batem com o contrato
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run api:types
+          git diff --exit-code --stat src/app/core/api/schema.d.ts
+
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env: { POSTGRES_USER: soar, POSTGRES_PASSWORD: ci, POSTGRES_DB: soar }
+        options: >-
+          --health-cmd "pg_isready -U soar -d soar"
+          --health-interval 5s --health-timeout 3s --health-retries 12
+        ports: ["5432:5432"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache-dependency-path: backend/go.sum }
+      - name: go test -race
+        working-directory: backend
+        env:
+          SOAR_DATABASE_URL: postgres://soar:ci@127.0.0.1:5432/soar?sslmode=disable
+          SOAR_INTEGRATION_TEST: "1"
+        run: go test ./... -race -count=1
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci && npx ng test --watch=false
+        working-directory: frontend
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version: "${{ env.GO_VERSION }}", cache-dependency-path: backend/go.sum }
+      - name: govulncheck
+        working-directory: backend
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+      - run: npm ci && npm audit --audit-level=high
+        working-directory: frontend
+      - uses: gitleaks/gitleaks-action@v2
+        env: { GITHUB_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+
+  images:
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    strategy:
+      matrix:
+        include:
+          - { name: api,      context: ./backend,  dockerfile: deploy/docker/api.Dockerfile,      budget_mb: 25 }
+          - { name: frontend, context: ./frontend, dockerfile: deploy/docker/frontend.Dockerfile, budget_mb: 30 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          tags: soar-${{ matrix.name }}:ci
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: contrato de entrega do SPA
+        if: matrix.name == 'frontend'
+        run: |
+          container=$(docker run -d --rm -p 127.0.0.1:8088:8080 soar-frontend:ci)
+          trap 'docker stop "$container" >/dev/null' EXIT
+          for attempt in $(seq 1 20); do
+            curl -fsS http://127.0.0.1:8088/healthz >/dev/null && break
+            if [ "$attempt" = 20 ]; then
+              docker logs "$container"
+              exit 1
+            fi
+            sleep 1
+          done
+          frontend/deploy/serving.test.sh http://127.0.0.1:8088
+
+      # Portão de verdade: o orçamento de imagem do docs/soar/03 §14.1 é
+      # verificado, não confiado. Foi exatamente isto que pegou a base
+      # nginx-unprivileged carregando 41 MB de build próprio.
+      - name: orçamento de tamanho
+        run: |
+          bytes=$(docker image inspect soar-${{ matrix.name }}:ci --format '{{.Size}}')
+          mb=$(( bytes / 1000000 ))
+          echo "soar-${{ matrix.name }}: ${mb} MB (teto ${{ matrix.budget_mb }} MB)"
+          if [ "$mb" -gt "${{ matrix.budget_mb }}" ]; then
+            echo "::error::imagem estourou o orçamento: ${mb} MB > ${{ matrix.budget_mb }} MB"
+            exit 1
+          fi
+
+      - name: não pode rodar como root
+        run: |
+          user=$(docker image inspect soar-${{ matrix.name }}:ci --format '{{.Config.User}}')
+          echo "USER=${user:-<vazio>}"
+          case "$user" in ""|root|0|0:0) echo "::error::imagem roda como root"; exit 1 ;; esac
+
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: soar-${{ matrix.name }}:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: os overlays do kustomize compilam
+        run: |
+          kubectl kustomize deploy/k8s/base      > /dev/null
+          kubectl kustomize deploy/k8s/overlays/local > /dev/null
+      # Todo pod precisa de limites e de probes — verificado, não combinado.
+      - name: todo container tem resources e probes
+        run: |
+          kubectl kustomize deploy/k8s/base > /tmp/all.yaml
+          python3 - <<'PY'
+          import sys, yaml
+          falhas = []
+          for doc in yaml.safe_load_all(open('/tmp/all.yaml')):
+              if not doc or doc.get('kind') not in ('Deployment', 'StatefulSet'):
+                  continue
+              nome = doc['metadata']['name']
+              for c in doc['spec']['template']['spec']['containers']:
+                  if 'resources' not in c or not c['resources'].get('limits'):
+                      falhas.append(f"{nome}/{c['name']}: sem limits")
+                  if 'readinessProbe' not in c:
+                      falhas.append(f"{nome}/{c['name']}: sem readinessProbe")
+                  sc = c.get('securityContext', {})
+                  if not sc.get('readOnlyRootFilesystem'):
+                      falhas.append(f"{nome}/{c['name']}: rootfs gravável")
+          if falhas:
+              print("\n".join(f"::error::{f}" for f in falhas)); sys.exit(1)
+          print("todos os containers têm limits, readinessProbe e rootfs read-only")
+          PY

@@ -1,0 +1,97 @@
+# Elastic SIEM — o primeiro content pack.
+#
+# As duas ações aqui não são exemplo: são as que o console em Python já
+# executava contra este laboratório, portadas com o mesmo comportamento
+# (plano com contagem, fingerprint revalidado, exceção escopada à regra).
+#
+# O que NÃO está aqui, deliberadamente: isolamento de host, bloqueio de IP e
+# quarentena de rede. Isolar o droplet deste ambiente já o deixou inalcançável
+# por SSH e pelo túnel reverso, e a recuperação exigiu o console web do
+# provedor. Uma ação cujo modo de falha é "pegar o carro e ir até o console"
+# não fica atrás de um botão a dois cliques de um dropdown de veredito
+# (docs/soar/03, AD-08).
+id: elastic-siem
+name: Elastic Security
+pack_id: elastic-siem
+
+auth:
+  type: basic
+  credential: env://KIBANA_AUTH   # usuario:senha
+
+rate_limit:
+  per_minute: 60
+circuit_breaker:
+  threshold: 5
+  reset_after: 120s
+
+health_check: find_rule
+
+actions:
+  - id: close_alerts
+    name: Fechar alertas no SIEM
+    autonomy: approval_required
+    permission: response.close_alerts
+    idempotent: true
+    plan: true
+    reversible: "reabrir os alertas alterando o status de volta para 'open'"
+    timeout: 120s
+    implemented: true
+    input:
+      rule_name: { type: string, required: true, descr: "Regra de detecção" }
+      host:      { type: string, required: false, descr: "Host, quando o escopo é por host" }
+      entity:    { type: string, required: false, descr: "Entidade do agrupamento" }
+      status:    { type: string, required: false, descr: "open | acknowledged | closed" }
+    output:
+      updated:  { type: integer, descr: "Quantos alertas mudaram de estado" }
+      failures: { type: integer, descr: "Quantos o Elasticsearch recusou" }
+
+  - id: create_exception
+    name: Criar exceção de regra
+    autonomy: approval_required
+    permission: response.create_exception
+    # Criar exceção duas vezes cria duas exceções: não é idempotente, e por
+    # isso nunca é repetida automaticamente por timeout.
+    idempotent: false
+    plan: true
+    reversible: "remover o item da lista de exceções da regra"
+    timeout: 60s
+    implemented: true
+    input:
+      rule_name: { type: string, required: true }
+      field:     { type: string, required: true, descr: "Campo ECS, ex. process.executable" }
+      value:     { type: string, required: true }
+      comment:   { type: string, required: true, descr: "Por que esta exceção existe" }
+    output:
+      exception_id: { type: string }
+      rule_id:      { type: string }
+
+  - id: find_rule
+    name: Localizar regra de detecção
+    autonomy: auto
+    permission: integration.read
+    idempotent: true
+    plan: false
+    timeout: 30s
+    implemented: true
+    input:
+      rule_name: { type: string, required: true }
+    output:
+      rule_id: { type: string }
+      enabled: { type: boolean }
+
+  # Declaradas no catálogo e SEM adapter neste deploy. A permissão pode ser
+  # concedida e a chamada ainda responde 501, com a razão — que é melhor que
+  # fingir que a capacidade não existe.
+  - id: isolate_host
+    name: Isolar endpoint
+    autonomy: approval_required
+    permission: response.isolate_endpoint
+    idempotent: true
+    plan: true
+    reversible: "remover o isolamento pelo console do Elastic Defend"
+    implemented: false
+    unavailable: >-
+      Desabilitado neste ambiente. O isolamento do droplet já cortou o SSH e o
+      túnel reverso, e a recuperação exigiu o console out-of-band do provedor.
+    input:
+      host: { type: string, required: true }

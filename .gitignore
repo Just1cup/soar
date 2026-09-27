@@ -1,0 +1,30 @@
+# Go
+/backend/bin/
+*.test
+*.out
+
+# Node / Angular
+node_modules/
+/frontend/dist/
+/frontend/.angular/
+
+# Ambiente
+.env
+*.local
+.agents/
+.codex/
+
+# Nunca versionar: os fixtures contêm nomes de host, IPs e caminhos reais.
+# Ver docs/soar/01 §6.3 (sanitizer) — são dados de laboratório, não de amostra.
+/backend/test/golden/**/*.case.json
+/backend/test/golden/**/*.evidence.txt
+/backend/test/golden/**/*.alertonly.txt
+/backend/test/golden/**/*.cluster.json
+
+# Dados de laboratório e vetores derivados não entram na distribuição pública.
+/test/golden/
+/backend/test/golden/
+/backend/internal/ingestion/testdata/fingerprints.json
+/scripts/freeze-python-assessment-reference.py
+/scripts/freeze-python-assessment-evaluation.py
+/research/capture/

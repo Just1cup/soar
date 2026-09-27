@@ -1,0 +1,7 @@
+DROP TABLE IF EXISTS incident.incidents;
+DROP TABLE IF EXISTS incident.incident_types;
+DROP TABLE IF EXISTS iam.users;
+DROP TABLE IF EXISTS core.tenants;
+DROP SCHEMA IF EXISTS incident;
+DROP SCHEMA IF EXISTS iam;
+DROP SCHEMA IF EXISTS core;

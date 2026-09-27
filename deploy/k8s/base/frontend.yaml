@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: Service
+metadata: { name: soar-frontend, namespace: soar }
+spec:
+  selector: { app: soar-frontend }
+  ports: [{ port: 8080, targetPort: http, name: http }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: soar-frontend, namespace: soar }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: soar-frontend } }
+  template:
+    metadata: { labels: { app: soar-frontend } }
+    spec:
+      serviceAccountName: soar-frontend
+      securityContext: { runAsNonRoot: true, runAsUser: 101, runAsGroup: 101,
+                         seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: nginx
+          image: soar-frontend:dev
+          ports: [{ containerPort: 8080, name: http }]
+          envFrom: [{ configMapRef: { name: soar-config } }]
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits:   { cpu: 200m, memory: 64Mi }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 5
+          # Rootfs read-only: tudo que o nginx escreve vai para emptyDir.
+          # /etc/nginx/conf.d precisa ser gravável porque o entrypoint roda
+          # envsubst no template.
+          volumeMounts:
+            - { name: tmp,     mountPath: /tmp }
+            - { name: cache,   mountPath: /var/cache/nginx }
+            - { name: confd,   mountPath: /etc/nginx/conf.d }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - { name: tmp,   emptyDir: { sizeLimit: 16Mi } }
+        - { name: cache, emptyDir: { sizeLimit: 16Mi } }
+        - { name: confd, emptyDir: { sizeLimit: 1Mi } }

@@ -1,0 +1,21 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: soar-api, namespace: soar }
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: soar-api } }
+---
+# Declarado, e DESLIGADO no overlay local: HPA com uma réplica num nó só é
+# encenação (docs/soar/03, AD-10). Num cluster de verdade, o worker escala por
+# profundidade de fila, não por CPU — um worker bloqueado em rate limit consome
+# ~0% de CPU e é exatamente quando a fila cresce.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: { name: soar-api, namespace: soar }
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: soar-api }
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }

@@ -1,0 +1,58 @@
+# Default deny. Tudo que não estiver permitido abaixo não acontece.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: default-deny, namespace: soar }
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: allow-dns, namespace: soar }
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } } }]
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: frontend, namespace: soar }
+spec:
+  podSelector: { matchLabels: { app: soar-frontend } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: {} , podSelector: { matchLabels: { app.kubernetes.io/name: ingress-nginx } } }]
+      ports: [{ protocol: TCP, port: 8080 }]
+  egress:
+    - to: [{ podSelector: { matchLabels: { app: soar-api } } }]
+      ports: [{ protocol: TCP, port: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: api, namespace: soar }
+spec:
+  podSelector: { matchLabels: { app: soar-api } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: soar-frontend } } }]
+      ports: [{ protocol: TCP, port: 8080 }]
+  egress:
+    # A API fala com o banco e com mais nada. Quem chama provedor externo é o
+    # worker (docs/soar/03 §12.4): isso limita o raio de uma SSRF alcançada
+    # pela API, e vale mais do que qualquer allowlist de URL.
+    - to: [{ podSelector: { matchLabels: { app: soar-postgres } } }]
+      ports: [{ protocol: TCP, port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: postgres, namespace: soar }
+spec:
+  podSelector: { matchLabels: { app: soar-postgres } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: soar-api } }
+        - podSelector: { matchLabels: { app: soar-migrate } }
+      ports: [{ protocol: TCP, port: 5432 }]

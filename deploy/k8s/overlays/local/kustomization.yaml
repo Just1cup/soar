@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: soar
+resources: [../../base]
+patches:
+  # Perfil edge num nó só: HPA sai (ver availability.yaml).
+  - target: { kind: HorizontalPodAutoscaler, name: soar-api }
+    patch: |
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata: { name: soar-api }
+  # PDB com uma réplica impediria drenar o único nó.
+  - target: { kind: PodDisruptionBudget, name: soar-api }
+    patch: |
+      $patch: delete
+      apiVersion: policy/v1
+      kind: PodDisruptionBudget
+      metadata: { name: soar-api }
+  # ConfigMap declarado como recurso (não gerado) se ajusta por patch:
+  # configMapGenerator com behavior:merge só funde com outro generator.
+  - target: { kind: ConfigMap, name: soar-config }
+    patch: |
+      - { op: replace, path: /data/SOAR_ENV,       value: development }
+      - { op: replace, path: /data/SOAR_LOG_LEVEL, value: debug }
+images:
+  - { name: soar-api,      newTag: dev }
+  - { name: soar-frontend, newTag: dev }

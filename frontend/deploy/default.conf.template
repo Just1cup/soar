@@ -1,0 +1,69 @@
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+
+    # `add_header` não é herdado por bloco que define o seu próprio, então o
+    # include aparece em todo location que usa add_header. Ver o comentário em
+    # security-headers.conf: sem isso a CSP é descartada no documento principal.
+    include /etc/nginx/security-headers.conf;
+
+    # Artefatos com hash no nome são imutáveis; o index nunca é. O separador
+    # aceita ponto e hífen, e o hash aceita o alfabeto URL-safe inteiro: além
+    # de letras e números, o esbuild pode emitir '-' e '_' (por exemplo,
+    # `chunk-D4S01PW-.js`).
+    location ~* "[.-][0-9a-zA-Z_-]{8,}\.(js|mjs|css|woff2)$" {
+        include /etc/nginx/security-headers.conf;
+        # Um só Cache-Control: `expires` emite o seu próprio cabeçalho e a
+        # resposta sairia com dois, deixando a política a cargo do navegador.
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        try_files $uri =404;
+    }
+
+    # Um asset que não existe é 404, nunca o index. Devolver HTML no lugar de um
+    # módulo faz o navegador recusar o script por MIME type e a aplicação não
+    # inicializa: tela parada, nenhum pedido à API e nenhum erro visível. Falhar
+    # com 404 mantém o defeito legível no console e no log.
+    location ~* "\.(js|mjs|css|woff2?|svg|png|jpe?g|gif|webp|ico|map|json|txt)$" {
+        include /etc/nginx/security-headers.conf;
+        try_files $uri =404;
+    }
+
+    location = /index.html {
+        include /etc/nginx/security-headers.conf;
+        add_header Cache-Control "no-store" always;
+    }
+
+    # O fallback do SPA devolveria index.html aqui: um navegador que pede
+    # /favicon.ico por convenção receberia HTML com cara de imagem. O ícone
+    # é o SVG declarado no <head>; este caminho não existe.
+    location = /favicon.ico {
+        access_log off;
+        return 404;
+    }
+
+    location = /healthz {
+        access_log off;
+        return 200 "ok\n";
+    }
+
+    location /api/ {
+        # Resolução ADIADA: com o upstream numa variável, o nginx não resolve o
+        # nome na partida. Sem isto o frontend não sobe enquanto a API estiver
+        # fora — e num cold start de cluster ela sempre está.
+        resolver ${NGINX_RESOLVER} valid=10s ipv6=off;
+        set $upstream_api ${API_UPSTREAM};
+        proxy_pass $upstream_api$request_uri;
+        proxy_set_header Host $host;
+        proxy_set_header X-Request-Id $http_x_request_id;
+		# Sobrescreve, em vez de repassar, para o cliente não escolher a chave
+		# do próprio rate limit de login.
+		proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 60s;
+    }
+
+    # SPA: rota desconhecida devolve o index e o router decide.
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

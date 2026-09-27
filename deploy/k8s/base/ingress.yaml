@@ -1,0 +1,18 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soar
+  namespace: soar
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: soar.local
+      http:
+        paths:
+          # A API entra pelo Ingress; o nginx do frontend só serve estático.
+          - { path: /api,    pathType: Prefix, backend: { service: { name: soar-api,      port: { number: 8080 } } } }
+          - { path: /health, pathType: Prefix, backend: { service: { name: soar-api,      port: { number: 8080 } } } }
+          - { path: /,       pathType: Prefix, backend: { service: { name: soar-frontend, port: { number: 8080 } } } }

@@ -1,0 +1,64 @@
+# Em cluster de verdade, prefira PostgreSQL gerenciado ou um operador maduro
+# (CloudNativePG/Patroni). Este StatefulSet existe para o perfil `edge`.
+apiVersion: v1
+kind: Service
+metadata: { name: soar-postgres, namespace: soar }
+spec:
+  clusterIP: None
+  selector: { app: soar-postgres }
+  ports: [{ port: 5432, targetPort: 5432, name: postgres }]
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata: { name: soar-postgres, namespace: soar }
+spec:
+  serviceName: soar-postgres
+  replicas: 1
+  selector: { matchLabels: { app: soar-postgres } }
+  template:
+    metadata: { labels: { app: soar-postgres } }
+    spec:
+      securityContext: { runAsNonRoot: true, runAsUser: 999, fsGroup: 999,
+                         seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: postgres
+          image: postgres:18-alpine
+          args: ["-c", "shared_preload_libraries=pg_stat_statements"]
+          env:
+            - name: POSTGRES_USER
+              value: soar
+            - name: POSTGRES_DB
+              value: soar
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: soar-secrets, key: POSTGRES_PASSWORD } }
+            # PostgreSQL 18 monta em /var/lib/postgresql, não .../data.
+            - name: PGDATA
+              value: /var/lib/postgresql/18/docker
+          ports: [{ containerPort: 5432 }]
+          # Rootfs read-only: o Postgres só precisa escrever no volume de
+          # dados, no diretório do socket e em /tmp.
+          volumeMounts:
+            - { name: data,   mountPath: /var/lib/postgresql }
+            - { name: run,    mountPath: /var/run/postgresql }
+            - { name: tmpdir, mountPath: /tmp }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits:   { cpu: "2",  memory: 2Gi }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", "soar", "-d", "soar"] }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - { name: run,    emptyDir: { sizeLimit: 8Mi } }
+        - { name: tmpdir, emptyDir: { sizeLimit: 64Mi } }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        # O StorageClass PRECISA apontar para o NVMe (docs/soar/07 §13.4):
+        # o HD deste host lê a 6-12 MB/s e já saturou a 120%.
+        resources: { requests: { storage: 20Gi } }

@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: soar
+resources:
+  - namespace.yaml
+  - serviceaccounts.yaml
+  - config.yaml
+  - postgres.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - frontend.yaml
+  - networkpolicy.yaml
+  - availability.yaml
+  - ingress.yaml
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: soar

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="SOAR">
+  <!-- Favicon SVG: o navegador aplica prefers-color-scheme DENTRO do arquivo,
+       então o ícone acompanha a barra de abas clara ou escura sem precisar de
+       dois arquivos. Escudo sólido em vez de contorno porque, a 16px, traço
+       fino de 1.5px vira borrão cinza. -->
+  <style>
+    .plate { fill: #1d4ed8; }
+    .mark  { fill: #ffffff; }
+    @media (prefers-color-scheme: dark) {
+      .plate { fill: #7aa5ff; }
+      .mark  { fill: #0d0f14; }
+    }
+  </style>
+  <path class="plate" d="M16 2 4 6.6v9.1c0 7 4.9 13.4 12 15.3 7.1-1.9 12-8.3 12-15.3V6.6L16 2Z"/>
+  <!-- Pulso de telemetria: a linha que um analista reconhece num gráfico. -->
+  <path class="mark" d="M8.6 16.6h3.2l2.1-4.6a.95.95 0 0 1 1.77.1l2.04 6.2 1.3-2.3a.95.95 0 0 1 .83-.49h3.66v2.1h-3.05l-2.35 4.16a.95.95 0 0 1-1.73-.17l-2-6.08-1.3 2.86a.95.95 0 0 1-.87.56H8.6v-2.34Z"/>
+</svg>
